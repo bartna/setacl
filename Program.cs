@@ -17,12 +17,12 @@ namespace setacl
         //default input parameters
         public static int th_cnt = 20;
         public static int item_per_th_cnt = 3000;
-        public static string myFirstDir = @"c:\test";
-        public static string logFilePath = @"C:\Users\Gyabo\source\repos\setacl\log.txt";
+        public static string myFirstDir = @"";
+        public static string logFilePath = @"";
         public static bool writeToLog = false;
         public static bool writeToConsole = true;
-        public static string logDateFormat = "yyyy-MM-dd HH:mm:ss.fff ";
-        public static LogLevels LogLevel = LogLevels.ALL;
+        public static string logDateFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        public static LogLevels LogLevel = LogLevels.INFO;
         
         //logging vars
         public enum LogLevels { ALL=5, TRACE=10, DEBUG=15, INFO=20, WARN=25, ERORR=30, FATAL=35, OFF=40 }
@@ -33,38 +33,50 @@ namespace setacl
             public static readonly object sem_consolePrint = new object();
             public static void all(string txt)
             {
-                if (LogLevels.ALL >= LogLevel) _print(txt);
+                if (LogLevels.ALL >= LogLevel) _print(txt, LogLevels.ALL);
             }
             public static void trace(string txt)
             {
-                if (LogLevels.TRACE >= LogLevel) _print(txt);
+                if (LogLevels.TRACE >= LogLevel) _print(txt, LogLevels.TRACE);
             }
             public static void debug(string txt)
             {
-                if (LogLevels.DEBUG >= LogLevel) _print(txt);
+                if (LogLevels.DEBUG >= LogLevel) _print(txt, LogLevels.DEBUG);
             }
             public static void info(string txt)
             {
-                if (LogLevels.INFO >= LogLevel) _print(txt);
+                if (LogLevels.INFO >= LogLevel) _print(txt, LogLevels.INFO);
             }
             public static void warn(string txt)
             {
-                if (LogLevels.WARN >= LogLevel) _print(txt);
+                if (LogLevels.WARN >= LogLevel) _print(txt, LogLevels.WARN);
             }
             public static void error(string txt)
             {
-                if (LogLevels.ERORR>= LogLevel) _print(txt);
+                if (LogLevels.ERORR>= LogLevel) _print(txt, LogLevels.ERORR);
             }
             public static void FATAL(string txt)
             {
-                if (LogLevels.FATAL >= LogLevel) _print(txt);
+                if (LogLevels.FATAL >= LogLevel) _print(txt, LogLevels.FATAL);
+                
+                //always write FATAL to console
+                if(!writeToConsole)
+                {
+                    lock (sem_consolePrint)
+                    {
+                        string msg = string.Format("{0} [FATAL]: {1}"
+                            , new string[] { DateTime.Now.ToString(logDateFormat) , txt } );
+                        Console.WriteLine(msg);
+                    }
+                }
             }
-
-            private static void _print(string txt)
+            private static void _print(string txt, LogLevels lvl)
             {
                 lock (sem_consolePrint)
                 {
                     string msg = DateTime.Now.ToString(logDateFormat) + txt;
+                    msg = string.Format("{0} [{1}]: {2}"
+                           , new string[] { DateTime.Now.ToString(logDateFormat), lvl.ToString(),  txt });
                     if (writeToConsole) Console.WriteLine(msg);
                     if (writeToLog) sb_log.Append(Environment.NewLine + msg);
                 }
@@ -72,23 +84,63 @@ namespace setacl
 
         }
 
+        static void PrintInfo()
+        {
+            Console.WriteLine();
+            Console.WriteLine("-------------------------------------------------------------------------------");
+            Console.WriteLine("   SETACL   ::   Reset ACL folder permissions using multithreading");
+            Console.WriteLine("                 Check App.config file for more MT settings");
+            Console.WriteLine("-------------------------------------------------------------------------------");
+            Console.WriteLine();
+        }
+        static void PrintUsage()
+        {
+            Console.WriteLine(string.Format("        Usage :: {0} {{root directory}}", new string[] { Path.GetFileName(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName) }));
+            Console.WriteLine();
+            Console.WriteLine(@"   {root directory} :: path to reset (e.g. c:\test)");
+            Console.WriteLine();
+        }
+
         static void Main(string[] args)
         {
             //acl_demo();
             //return;
+            PrintInfo();
+
+            if (args.Length < 1 || string.IsNullOrWhiteSpace( args[0] ) )
+            {
+                PrintUsage();
+                return;
+            }
+
+            myFirstDir = args[0];
+            Console.WriteLine("   {root directory} :: '" + myFirstDir +"'");
+            Console.WriteLine();
+
             LoadInputParameters();
-
-            print.info("Parameters: ");
-
+            print.trace("Logging started");
+            print.info("Parameters loaded from App.config:");
             print.info("ThreadCount=" + th_cnt.ToString());
             print.info("HowManyItemsPerThread=" + item_per_th_cnt.ToString());
-            print.info("RootDir=" + myFirstDir.ToString());
             print.info("LogFilePath=" + logFilePath.ToString());
             print.info("WriteLogToFile=" + writeToLog.ToString());
             print.info("WriteLogToConsole=" + writeToConsole.ToString());
             print.info("LogDateFormat=" + logDateFormat.ToString());
             print.info("LogLevel=" + LogLevel.ToString());
 
+            if (!Directory.Exists(myFirstDir))
+            {
+                print.FATAL("Directory '" + myFirstDir + "' does not exists! (EXIT)");
+                return;
+            }
+
+            if(writeToLog && ( string.IsNullOrWhiteSpace(logFilePath) || !Directory.Exists( Path.GetDirectoryName(logFilePath) ) ) )
+            {
+                print.FATAL("Write to log file is enabled but directory for log file does not exists! '" + logFilePath + "' (EXIT)");
+                return;
+            }
+
+            //icacls "c:\test" /reset /T /C /Q
 
             DateTime dtstart = DateTime.Now;
             int citems = 0;
@@ -114,6 +166,8 @@ namespace setacl
             for (; dirsToTravers.Count > 0; cdirs++)
             {
                 string curfolder = dirsToTravers.Dequeue();
+                fileQueues[current_thread].Enqueue(curfolder);
+
                 //every new folder should be added to the directory queue
                 foreach (string myDir in Directory.EnumerateDirectories(curfolder))
                 {
@@ -121,9 +175,10 @@ namespace setacl
                     dirsToTravers.Enqueue(myDir);
                 }
                 
-                //every new file should be 
+                //every new file should be handled
                 foreach (string myfile in Directory.EnumerateFiles(curfolder))
                 {
+                    //continue;
                     print.debug("file: " + myfile);
                     cfiles++;
                     fileQueues[current_thread].Enqueue(myfile);
@@ -142,12 +197,11 @@ namespace setacl
                     }
 
                 }
-                //fileQueues[current_thread].Enqueue(curfolder);
             }
 
             if( fileQueues[current_thread].Count > 0 )
             {
-                //last batch of files (thread is already joined)
+                //last batch of files. Thread {current_thread} is already joined in the above loop
                 my_threads[current_thread] = new Thread(new ParameterizedThreadStart(tsp_oneParamQueueString));
                 my_threads[current_thread].Start(fileQueues[current_thread]);
             }
@@ -163,7 +217,7 @@ namespace setacl
 
             citems = cfiles + cdirs;
             
-            //single-threaded single-folder version
+            //disabled single-threaded single-folder version
             if (false)
             {
                 foreach (string myfile in Directory.EnumerateFileSystemEntries(myFirstDir))
@@ -186,11 +240,13 @@ namespace setacl
             TimeSpan ts = dtend.Subtract(dtstart);
 
             //print some statistics
-            print.info("Time: " + ts.TotalSeconds.ToString() );
-            print.info("Number of items: "+ citems.ToString() + ", files: "+ cfiles + ", dirs: " + cdirs+ ",  changed: " + citemschgd.ToString() ) ;
-            print.info("Number of items chaned in the threads: " + th_itemscnt.ToString());
+            print.info(string.Format("Work finished in : {0:n4} s", ts.TotalSeconds ) );
+            print.info("Number of items: "+ citems.ToString() + ", files: "+ cfiles + ", dirs: " + cdirs ) ;
+            print.info(string.Format("Successfully processed {0} files; Failed processing {1} files", th_itemscnt , th_itemscnt_failed));
 
-            System.IO.File.WriteAllText(logFilePath, sb_log.ToString());
+
+
+            if ( writeToLog ) System.IO.File.WriteAllText(logFilePath, sb_log.ToString());
 
         }
 
@@ -207,9 +263,6 @@ namespace setacl
 
             if (bool.TryParse(ConfigurationManager.AppSettings.Get("WriteLogToFile"), out bPar) ) writeToLog = bPar;
             if (bool.TryParse(ConfigurationManager.AppSettings.Get("WriteLogToConsole"), out bPar) ) writeToConsole = bPar;
-
-            sPar = ConfigurationManager.AppSettings.Get("RootDir");
-            if ( !string.IsNullOrWhiteSpace( sPar ) ) myFirstDir = sPar;
 
             sPar = ConfigurationManager.AppSettings.Get("LogFilePath");
             if (!string.IsNullOrWhiteSpace(sPar)) logFilePath = sPar;
@@ -287,6 +340,7 @@ namespace setacl
         }
 
         public static int th_itemscnt = 0;
+        public static int th_itemscnt_failed = 0;
         public static readonly object th_itemscount_lock = new object();
         public static void th_execQueue(object p_queue_obj)
         {
@@ -302,15 +356,26 @@ namespace setacl
                     {
                         string file = p_queue.Dequeue();
                         print.debug(threadInfo + " handling file: " + file);
-                        
-                        //count all items that have been updated by the threads
-                        lock(th_itemscount_lock)
-                        {
-                            th_itemscnt++;
-                        }
 
                         //perform the task
-                        RestoreInheritanceAndDeleteAllOtherRules(file);
+                        try
+                        {
+                            RestoreInheritanceAndDeleteAllOtherRules(file);
+                            //count all items that have been updated by the threads
+                            lock (th_itemscount_lock)
+                            {
+                                th_itemscnt++;
+                            }
+                        }
+                        catch (Exception ee)
+                        {
+                            //count all items that have NOT been updated by the threads
+                            print.error("Entry not changed due to the exception: " + ee.ToString() + "; Unchaned file: " + file);
+                            lock (th_itemscount_lock)
+                            {
+                                th_itemscnt_failed++;
+                            }
+                        }
                     }
                 }
                 else

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "setacl": {
+      "commandName": "Project",
+      "commandLineArgs": "\"e:\\test\"  /reset /T /C /Q"
+    }
+  }
+}
